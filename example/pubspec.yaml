@@ -38,7 +38,7 @@ dependencies:
   cupertino_icons: ^1.0.5
   gallery_saver: ^2.3.2
   render:
-    path: ../
+    path: ../render
   video_player: ^2.5.2
 
 

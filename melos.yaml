@@ -1,0 +1,7 @@
+name: render
+
+packages:
+  - render_core/
+  - render
+  - example
+

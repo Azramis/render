@@ -1,6 +1,5 @@
-import 'package:render/src/formats/service.dart';
-
-import 'abstract.dart';
+import 'package:render/formats/abstract.dart';
+import 'package:render_core/render_core.dart';
 
 class MovFormat extends MotionFormat {
   /// MOV (QuickTime File Format) is a file format that is used to store video

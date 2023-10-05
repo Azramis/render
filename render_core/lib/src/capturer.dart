@@ -1,22 +1,21 @@
 import 'dart:async';
-import 'dart:typed_data';
+import 'dart:math';
 import 'dart:ui' as ui;
 
-import 'package:ffmpeg_kit_flutter_https_gpl/ffmpeg_kit.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
-import 'package:render/src/service/notifier.dart';
-import 'package:render/src/service/session.dart';
-import 'package:render/src/service/settings.dart';
-import 'package:render/src/service/task_identifier.dart';
-import 'formats/abstract.dart';
+import 'package:render_core/src/service/notifier.dart';
+import 'package:render_core/src/service/session.dart';
+import 'package:render_core/src/service/settings.dart';
+import 'package:render_core/src/service/task_identifier.dart';
+
 import 'service/exception.dart';
 
-class RenderCapturer<K extends RenderFormat> {
+class RenderCapturer<R> {
   /// Settings of how each frame should be rendered.
 
   /// Current session captures should be assigned to.
-  final RenderSession<K, RenderSettings> session;
+  final RenderSession<R, RenderSettings> session;
 
   /// Context of the flutter app, if a widget should be captured
   final BuildContext? context;
@@ -47,74 +46,68 @@ class RenderCapturer<K extends RenderFormat> {
   /// will be seen as first frame.
   Size? firstFrameSize;
 
-  /// Runs a capturing process for a defined time. Returns capturing time duration.
-  Future<RenderSession<K, RealRenderSettings>> run(Duration duration) async {
-    start(duration);
-
-    await Future.delayed(duration);
-
-    return await finish();
-  }
-
-  /// Takes a single capture
-  Future<RenderSession<K, RealRenderSettings>> single() async {
-    startTime = DateTime.now();
-    _captureFrame(0, 1);
-    await Future.doWhile(() async {
-      //await all active capture handlers
-      await Future.wait(_handlers);
-      return _handlers.length < _unhandledCaptures.length;
-    });
-    final capturingDuration = Duration(
-        milliseconds: DateTime.now().millisecondsSinceEpoch -
-            startTime!.millisecondsSinceEpoch);
-    return session.upgrade(capturingDuration, 1);
-  }
+  final Completer<RenderSession<R, RealRenderSettings>> _captureCompleter =
+      Completer<RenderSession<R, RealRenderSettings>>();
 
   /// Starts new capturing process for unknown duration
-  void start([Duration? duration]) async {
+  Future<RenderSession<R, RealRenderSettings>> run([Duration? duration]) async {
     assert(!_rendering, "Cannot start new process, during an active one.");
     _rendering = true;
     startTime = DateTime.now();
-    session.binding.addPostFrameCallback((binderTimeStamp) {
-      startingDuration = session.binding.currentFrameTimeStamp;
-      _postFrameCallback(
-        binderTimeStamp: binderTimeStamp,
-        frame: 0,
-        duration: duration,
+    startingDuration = session.binding.currentFrameTimeStamp;
+    _postFrameCallback(
+      binderTimeStamp: startingDuration!,
+      frame: 0,
+    );
+
+    if (duration != null) {
+      Future.delayed(
+        duration,
+        () {
+          if (!_captureCompleter.isCompleted) {
+            finish();
+          }
+        },
       );
-    });
+    }
+
+    return _captureCompleter.future;
   }
 
   /// Finishes current capturing process. Returns the total capturing time.
-  Future<RenderSession<K, RealRenderSettings>> finish() async {
+  void finish() {
     assert(_rendering, "Cannot finish capturing as, no active capturing.");
-    final capturingDuration = Duration(
-        milliseconds: DateTime.now().millisecondsSinceEpoch -
-            startTime!.millisecondsSinceEpoch); // log end of capturing
-    _rendering = false;
-    startingDuration = null;
-    // * wait for handlers
-    await Future.doWhile(() async {
-      //await all active capture handlers
-      await Future.wait(_handlers);
-      return _handlers.length < _unhandledCaptures.length;
-    });
-    // * finish capturing, notify session
-    final frameAmount = _unhandledCaptures.length;
-    _handlers.clear();
-    _unhandledCaptures.clear();
-    return session.upgrade(capturingDuration, frameAmount);
+
+    _captureCompleter.complete(Future.sync(
+      () async {
+        final capturingDuration = Duration(
+            milliseconds: DateTime.now().millisecondsSinceEpoch -
+                startTime!.millisecondsSinceEpoch); // log end of capturing
+        _rendering = false;
+        startingDuration = null;
+        // * wait for handlers
+        await Future.doWhile(() async {
+          //await all active capture handlers
+          await Future.wait(_handlers);
+          return _handlers.length < _unhandledCaptures.length;
+        });
+        // * finish capturing, notify session
+        final frameAmount = _unhandledCaptures.length;
+        _handlers.clear();
+        _unhandledCaptures.clear();
+
+        return session.upgrade(capturingDuration, frameAmount);
+      },
+    ));
   }
 
   /// A callback function that is called after each frame is rendered.
   void _postFrameCallback({
     required Duration binderTimeStamp,
     required int frame,
-    Duration? duration,
   }) async {
     if (!_rendering) return;
-    final targetFrameRate = session.settings.asMotion?.frameRate ?? 1;
+    final targetFrameRate = session.settings.frameRate;
     final relativeTimeStamp =
         binderTimeStamp - (startingDuration ?? Duration.zero);
     final nextMilliSecond = (1 / targetFrameRate) * frame * 1000;
@@ -124,16 +117,22 @@ class RenderCapturer<K extends RenderFormat> {
         (binderTimeStamp) => _postFrameCallback(
           binderTimeStamp: binderTimeStamp,
           frame: frame,
-          duration: duration,
         ),
       );
       // but we do nothing, because we skip this frame
       return;
     }
+
+    final maxFramesCount = session.settings.framesCount;
+
+    if (maxFramesCount != null && maxFramesCount <= frame) {
+      // Captured frames count reached, now time to quit
+      finish();
+      return;
+    }
+
     try {
-      final totalFrameTarget =
-          duration != null ? duration.inSeconds * targetFrameRate : null;
-      _captureFrame(frame, totalFrameTarget);
+      _captureFrame(frame);
     } on RenderException catch (exception) {
       session.recordError(exception);
       if (exception.fatal) return;
@@ -142,52 +141,32 @@ class RenderCapturer<K extends RenderFormat> {
       (binderTimeStamp) => _postFrameCallback(
         binderTimeStamp: binderTimeStamp,
         frame: frame + 1,
-        duration: duration,
       ),
     );
   }
 
   /// Converting the raw image data to a png file and writing the capture.
   Future<void> _handleCapture(
-    int captureNumber, [
-    int? totalFrameTarget,
-  ]) async {
+    int captureNumber,
+  ) async {
     _activeHandlers++;
     try {
       final ui.Image capture = _unhandledCaptures.elementAt(captureNumber);
-      // * retrieve bytes
-      // toByteData(format: ui.ImageByteFormat.png) takes way longer than raw
-      // and then converting to png with ffmpeg
-      final ByteData? byteData =
-          await capture.toByteData(format: ui.ImageByteFormat.rawRgba);
-      final rawIntList = byteData!.buffer.asInt8List();
-      // * write raw file for processing
-      final rawFile = session
-          .createProcessFile("frameHandling/frame_raw$captureNumber.bmp");
-      await rawFile.writeAsBytes(rawIntList);
-      // * write & convert file (to save storage)
-      final file = session.createInputFile("frame$captureNumber.png");
-      final saveSize = Size(
-        // adjust frame size, so that it can be divided by 2
-        (capture.width / 2).ceil() * 2,
-        (capture.height / 2).ceil() * 2,
+
+      session.delegate.handleCapture(
+        capture: capture,
+        captureNumber: captureNumber,
       );
-      await FFmpegKit.executeWithArguments([
-        "-y",
-        "-f", "rawvideo", // specify input format
-        "-pixel_format", "rgba", // maintain transparency
-        "-video_size", "${capture.width}x${capture.height}", // set capture size
-        "-i", rawFile.path, // input the raw frame
-        "-vf", "scale=${saveSize.width}:${saveSize.height}", // scale to save
-        file.path, //out put png
-      ]);
+
       // * finish
       capture.dispose();
-      rawFile.deleteSync();
       if (!_rendering) {
         //only record next state, when rendering is done not to mix up notification
-        _recordActivity(RenderState.handleCaptures, captureNumber,
-            totalFrameTarget, "Handled frame $captureNumber");
+        _recordActivity(
+          RenderState.handleCaptures,
+          captureNumber,
+          "Handled frame $captureNumber",
+        );
       }
     } catch (e) {
       session.recordError(
@@ -198,22 +177,22 @@ class RenderCapturer<K extends RenderFormat> {
       );
     }
     _activeHandlers--;
-    _triggerHandler(totalFrameTarget);
+    _triggerHandler();
   }
 
   /// Triggers the next handler, if within allowed simultaneous handlers
   /// and images still available.
-  void _triggerHandler([int? totalFrameTarget]) {
+  void _triggerHandler() {
     final nextCaptureIndex = _handlers.length;
     if (_activeHandlers <
-            (session.settings.asMotion?.simultaneousCaptureHandlers ?? 1) &&
+            max(1, session.settings.maxSimultaneousCaptureHandlers) &&
         nextCaptureIndex < _unhandledCaptures.length) {
-      _handlers.add(_handleCapture(nextCaptureIndex, totalFrameTarget));
+      _handlers.add(_handleCapture(nextCaptureIndex));
     }
   }
 
   /// Captures associated task of this frame
-  void _captureFrame(int frameNumber, [int? totalFrameTarget]) {
+  void _captureFrame(int frameNumber) {
     // * capture
     ui.Image image;
     if (session.task is KeyIdentifier) {
@@ -239,9 +218,9 @@ class RenderCapturer<K extends RenderFormat> {
     }
     // * initiate handler
     _unhandledCaptures.add(image);
-    _triggerHandler(totalFrameTarget);
-    _recordActivity(RenderState.capturing, frameNumber, totalFrameTarget,
-        "Captured frame $frameNumber");
+    _triggerHandler();
+    _recordActivity(
+        RenderState.capturing, frameNumber, "Captured frame $frameNumber");
   }
 
   /// Using the `RenderRepaintBoundary` to capture the current frame.
@@ -335,8 +314,9 @@ class RenderCapturer<K extends RenderFormat> {
   }
 
   /// Recording the activity of the current session specifically for capturing
-  void _recordActivity(
-      RenderState state, int frame, int? totalFrameTarget, String message) {
+  void _recordActivity(RenderState state, int frame, String message) {
+    final totalFrameTarget = session.settings.framesCount;
+
     if (totalFrameTarget != null) {
       session.recordActivity(
           state, ((1 / totalFrameTarget) * frame).clamp(0.0, 1.0),

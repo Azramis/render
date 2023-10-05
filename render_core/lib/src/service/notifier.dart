@@ -1,8 +1,4 @@
-import 'dart:io';
-import 'package:render/src/service/session.dart';
-import 'package:render/src/service/settings.dart';
-import '../formats/abstract.dart';
-import 'exception.dart';
+import 'package:render_core/render_core.dart';
 
 abstract class RenderNotifier {
   ///The current progression of the rendering time
@@ -144,17 +140,14 @@ class RenderActivity extends RenderNotifier {
   }
 }
 
-class RenderResult extends RenderActivity {
-  /// The output file. Note that the file is stored in a temporary directory, all
-  /// data might be deleted any time. To store permanently make sure to write it
-  /// to a permanent directory (see getApplicationDocumentsDirectory()
-  /// via [path_provider](https://pub.dev/packages/path_provider) plugin)
-  final File output;
+class RenderResult<T> extends RenderActivity {
+  /// The output data. It might be a [File] or anything else
+  final T output;
 
   ///The settings used to create the output file.
   final RealRenderSettings usedSettings;
 
-  final RenderFormat format;
+  final RenderFormat<T> format;
 
   RenderResult({
     required this.format,

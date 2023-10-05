@@ -1,19 +1,3 @@
-import 'dart:io';
-
-/// Arguments associated for ffmpeg execution. Note, that calling "ffmpeg"
-/// is not needed.
-class FFmpegRenderOperation {
-  final List<String> arguments;
-
-  /// Takes ffmpeg arguments and null. Nulls will simply be converted to string.
-  /// Will split arguments into two, if a `??` is found
-  FFmpegRenderOperation(List<String?> arguments)
-      : arguments = arguments
-            .whereType<String>()
-            .expand((element) => element.split("??"))
-            .toList();
-}
-
 /// How the format can be handled. This is important for handling the file later
 /// (eg. displaying the file). Some file types might be [FormatType.motion] but
 /// still should be handled like an image (eg. apng, gif, etc.).
@@ -131,31 +115,4 @@ enum Interpolation {
   /// specific software or libraries are being used that support this
   /// method.
   sinc,
-}
-
-class RenderAudio {
-  /// The path to the audio source (must be compatible with ffmpeg source path)
-  final String path;
-
-  /// The start time in seconds
-  final double startTime;
-
-  /// The end time in seconds
-  /// If the time exceeds the duration, it will crop at the end.
-  final double endTime;
-
-  /// Audio from a url source. This can also be a video format, where only the
-  /// sound is being taken
-  RenderAudio.url(Uri url, {this.startTime = 0, this.endTime = 1000})
-      : path = url.toString();
-
-  /// Audio from a File source. This can also be a video format, where only the
-  /// sound is being taken
-  RenderAudio.file(File file, {this.startTime = 0, this.endTime = 1000})
-      : path = file.path;
-
-  /// Duration of expected RenderAudio. Duration may not relate to the actual
-  /// audio duration, as [endTime] can be specified arbitrarily
-  Duration? get duration =>
-      Duration(milliseconds: (endTime / 1000 - startTime / 1000).toInt());
 }

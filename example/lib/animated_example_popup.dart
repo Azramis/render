@@ -57,7 +57,7 @@ class AnimatedExamplePopUp extends StatelessWidget {
                       "Total render time: ${result.totalRenderTime.inMinutes}:"
                       "${result.totalRenderTime.inSeconds}:"
                       "${result.totalRenderTime.inMilliseconds}\n"
-                      "Format: ${result.format.extension}\n"
+                      //"Format: ${result.format.extension}\n"
                       "Video duration: ${controller?.value.duration}\n"
                       "Size: ${result.output.lengthSync() / 1000000} MB",
                       textAlign: TextAlign.start,
@@ -85,7 +85,7 @@ class AnimatedExamplePopUp extends StatelessWidget {
                   "Total render time: ${result.totalRenderTime.inMinutes}:"
                   "${result.totalRenderTime.inSeconds}:"
                   "${result.totalRenderTime.inMilliseconds}\n"
-                  "Format: ${result.format.extension}\n"
+                  //"Format: ${result.format.extension}\n"
                   "Size: ${result.output.lengthSync() / 1000000} MB",
                   textAlign: TextAlign.start,
                 ),

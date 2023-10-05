@@ -1,4 +1,5 @@
-import '../../render.dart';
+import 'package:render/formats/abstract.dart';
+import 'package:render_core/render_core.dart';
 
 class PngFormat extends ImageFormat {
   /// PNG (Portable Network Graphics) is a lossless image format that supports

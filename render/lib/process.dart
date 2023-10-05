@@ -4,54 +4,23 @@ import 'package:ffmpeg_kit_flutter_https_gpl/ffmpeg_kit_config.dart';
 import 'package:ffmpeg_kit_flutter_https_gpl/ffmpeg_session.dart';
 import 'package:ffmpeg_kit_flutter_https_gpl/log.dart';
 import 'package:ffmpeg_kit_flutter_https_gpl/statistics.dart';
-import 'package:render/src/formats/abstract.dart';
-import 'package:render/src/service/notifier.dart';
-import 'package:render/src/service/session.dart';
-import 'package:render/src/service/settings.dart';
-import 'service/exception.dart';
+import 'package:render/formats/abstract.dart';
+import 'package:render/services/settings.dart';
+import 'package:render_core/render_core.dart';
 
-abstract class RenderProcessor<T extends RenderFormat> {
-  final RenderSession<T, RealRenderSettings> session;
+class FFMpegRenderProcessor {
+  final RenderSession<File, RealRenderSettings<FFMpegSettings>> session;
 
-  RenderProcessor(this.session);
-
-  bool _processing = false;
-
-  String get inputPath;
-
-  ///Converts saved frames from temporary directory to output file
-  Future<void> process() async {
-    if (_processing) {
-      throw const RenderException(
-          "Cannot start new process, during an active one.");
-    }
-    _processing = true;
-    try {
-      final output =
-          await _processTask(session.format.processShare);
-      session.recordResult(output);
-      _processing = false;
-    } on RenderException catch (error) {
-      session.recordError(error);
-    }
-  }
+  FFMpegRenderProcessor(this.session);
 
   /// Processes task frames and writes the output with the specific format
   /// Returns the process output file.
-  Future<File> _processTask(double progressShare) async {
-    final mainOutputFile =
-        session.createOutputFile("output_main.${session.format.extension}");
-    // Receive main operation processing instructions
-    final operation = session.format.processor(
-      inputPath: inputPath,
-      outputPath: mainOutputFile.path,
-      frameRate: session.settings.realFrameRate,
-    );
+  Future<void> process(
+      FFmpegRenderOperation operation, double progressShare) async {
     await _executeCommand(
       operation.arguments,
       progressShare: progressShare,
     );
-    return mainOutputFile;
   }
 
   /// Wrapper around the FFmpeg command execution. Takes care of notifying the
@@ -98,7 +67,7 @@ abstract class RenderProcessor<T extends RenderFormat> {
       },
     );
     await FFmpegKitConfig.ffmpegExecute(ffmpegSession).timeout(
-      session.settings.processTimeout,
+      session.settings.originSettings.processTimeout,
       onTimeout: () {
         session.recordError(
           const RenderException(
@@ -110,18 +79,4 @@ abstract class RenderProcessor<T extends RenderFormat> {
       },
     );
   }
-}
-
-class ImageProcessor extends RenderProcessor<ImageFormat> {
-  ImageProcessor(super.session);
-
-  @override
-  String get inputPath => "${session.inputDirectory}/frame0.png";
-}
-
-class MotionProcessor extends RenderProcessor<MotionFormat> {
-  MotionProcessor(super.session);
-
-  @override
-  String get inputPath => "${session.inputDirectory}/frame%d.png";
 }

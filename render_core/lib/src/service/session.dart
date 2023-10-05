@@ -1,38 +1,23 @@
 import 'dart:async';
-import 'dart:io';
+
 import 'package:flutter/scheduler.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:render/src/service/settings.dart';
-import 'package:render/src/service/task_identifier.dart';
+import 'package:render_core/src/service/settings.dart';
+import 'package:render_core/src/service/task_identifier.dart';
 import 'package:uuid/uuid.dart';
+
 import '../formats/abstract.dart';
 import 'exception.dart';
 import 'notifier.dart';
 
 /// A detached render session is a render session that is not attached to a view
-class DetachedRenderSession<T extends RenderFormat, K extends RenderSettings> {
+class DetachedRenderSession<R, K extends RenderSettings> {
   /// Pointer to session files and operation.
   final String sessionId;
-
-  /// Directory of a temporary storage, where files can be used for processing.
-  /// This should be somewhere in a RAM location for fast processing.
-  final String temporaryDirectory;
-
-  /// Where internal files are being written (frames, layers, palettes, etc.)
-  /// Note that there will be additional sub-directories that separate different
-  /// internal actions and sessions. Directories will be deleted after a session.
-  final String inputDirectory;
-
-  /// Where result files are being written
-  final String outputDirectory;
-
-  /// A directory where files are being written that are used for processing.
-  final String processDirectory;
 
   /// All render related settings
   final K settings;
 
-  final T format;
+  final RenderFormat<R> format;
 
   /// What notifications should be displayed
   final LogLevel logLevel;
@@ -40,59 +25,49 @@ class DetachedRenderSession<T extends RenderFormat, K extends RenderSettings> {
   /// Binding to the Context of the [Render] widget.
   final SchedulerBinding binding;
 
+  final RenderDelegate<R> delegate;
+
   /// A class that holds information about the current detached session. Ranging
   /// from directories to session identification.
   DetachedRenderSession({
+    required LogLevel logLevel,
+    required SchedulerBinding binding,
+    required String sessionId,
+    required K settings,
+    required RenderFormat<R> format,
+  }) : this._(
+          logLevel: logLevel,
+          binding: binding,
+          sessionId: sessionId,
+          settings: settings,
+          format: format,
+          delegate: format.createDelegate(sessionId, settings),
+        );
+
+  DetachedRenderSession._({
     required this.logLevel,
     required this.binding,
-    required this.outputDirectory,
-    required this.inputDirectory,
     required this.sessionId,
-    required this.temporaryDirectory,
-    required this.processDirectory,
     required this.settings,
     required this.format,
+    required this.delegate,
   });
 
   /// Creates a detached render session from default values (paths & session syntax)
   /// Attach a session by initializing RenderPaint and Context values by
   /// extending with [RenderSession]
-  static Future<DetachedRenderSession<T, K>>
-      create<T extends RenderFormat, K extends RenderSettings>(
-          T format, K settings, LogLevel logLevel) async {
-    final tempDir = await getTemporaryDirectory();
+  static Future<DetachedRenderSession<R, K>>
+      create<R, K extends RenderSettings>(
+          RenderFormat<R> format, K settings, LogLevel logLevel) async {
     final sessionId = const Uuid().v4();
-    return DetachedRenderSession<T, K>(
+    return DetachedRenderSession<R, K>(
       logLevel: logLevel,
       binding: SchedulerBinding.instance,
-      outputDirectory: "${tempDir.path}/render/$sessionId/output",
-      inputDirectory: "${tempDir.path}/render/$sessionId/input",
-      processDirectory: "${tempDir.path}/render/$sessionId/process",
       sessionId: sessionId,
-      temporaryDirectory: tempDir.path,
       settings: settings,
       format: format,
     );
   }
-
-  ///Creates a new file path if not present and returns the file as directory
-  File _createFile(String path) {
-    final outputFile = File(path);
-    if (!outputFile.existsSync()) outputFile.createSync(recursive: true);
-    return outputFile;
-  }
-
-  /// Creating a file in the input directory.
-  File createInputFile(String subPath) =>
-      _createFile("$inputDirectory/$subPath");
-
-  /// Creating a file in the output directory.
-  File createOutputFile(String subPath) =>
-      _createFile("$outputDirectory/$subPath");
-
-  /// Creating a file in the process directory.
-  File createProcessFile(String subPath) =>
-      _createFile("$processDirectory/$subPath");
 
   /// The expected processing state share each part holds. This is relevant for
   /// calculating the expected time remain and progress percentage of rendering.
@@ -111,8 +86,8 @@ class DetachedRenderSession<T extends RenderFormat, K extends RenderSettings> {
   }
 }
 
-class RenderSession<T extends RenderFormat, K extends RenderSettings>
-    extends DetachedRenderSession<T, K> {
+class RenderSession<R, K extends RenderSettings>
+    extends DetachedRenderSession<R, K> {
   /// Used to identify the tasks that should be rendered. This must include
   /// a main rendering task.
   final TaskIdentifier task;
@@ -132,11 +107,7 @@ class RenderSession<T extends RenderFormat, K extends RenderSettings>
   RenderSession({
     required super.logLevel,
     required super.settings,
-    required super.inputDirectory,
-    required super.outputDirectory,
-    required super.processDirectory,
     required super.sessionId,
-    required super.temporaryDirectory,
     required super.format,
     required super.binding,
     required this.task,
@@ -151,43 +122,35 @@ class RenderSession<T extends RenderFormat, K extends RenderSettings>
   /// A constructor that takes a `DetachedRenderSession` and creates a
   /// `RenderSession` from it.
   RenderSession.fromDetached({
-    required DetachedRenderSession<T, K> detachedSession,
+    required DetachedRenderSession<R, K> detachedSession,
     required StreamController<RenderNotifier> notifier,
     required this.task,
     required this.onDispose,
     DateTime? startTime,
   })  : _notifier = notifier,
         startTime = DateTime.now(),
-        super(
+        super._(
           logLevel: detachedSession.logLevel,
           binding: detachedSession.binding,
           format: detachedSession.format,
           settings: detachedSession.settings,
-          processDirectory: detachedSession.processDirectory,
-          inputDirectory: detachedSession.inputDirectory,
-          outputDirectory: detachedSession.outputDirectory,
           sessionId: detachedSession.sessionId,
-          temporaryDirectory: detachedSession.temporaryDirectory,
+          delegate: detachedSession.delegate,
         );
 
   /// Upgrade the current renderSession to a real session
-  RenderSession<T, RealRenderSettings> upgrade(
+  RenderSession<R, RealRenderSettings<K>> upgrade(
       Duration capturingDuration, int frameAmount) {
-    return RenderSession<T, RealRenderSettings>(
+    return RenderSession<R, RealRenderSettings<K>>(
       settings: RealRenderSettings(
-        pixelRatio: settings.pixelRatio,
-        processTimeout: settings.processTimeout,
+        originSettings: settings,
         capturingDuration: capturingDuration,
         frameAmount: frameAmount,
       ),
       onDispose: onDispose,
       startTime: startTime,
       logLevel: logLevel,
-      inputDirectory: inputDirectory,
-      outputDirectory: outputDirectory,
-      processDirectory: processDirectory,
       sessionId: sessionId,
-      temporaryDirectory: temporaryDirectory,
       format: format,
       binding: binding,
       task: task,
@@ -247,7 +210,7 @@ class RenderSession<T extends RenderFormat, K extends RenderSettings>
   }
 
   /// Recording the result of the render session.
-  void recordResult(File output, {String? message, String? details}) {
+  void recordResult(R output, {String? message, String? details}) {
     if (_notifier.isClosed) return;
     _notifier.add(
       RenderResult(
@@ -263,15 +226,26 @@ class RenderSession<T extends RenderFormat, K extends RenderSettings>
     dispose();
   }
 
+  bool _processing = false;
+
+  Future<void> processResult() async {
+    if (_processing) {
+      throw const RenderException(
+          "Cannot start new process, during an active one.");
+    }
+    _processing = true;
+    try {
+      final output = await delegate.process(this);
+      recordResult(output);
+      _processing = false;
+    } on RenderException catch (error) {
+      recordError(error);
+    }
+  }
+
   /// Disposing the current render session.
   Future<void> dispose() async {
     onDispose();
-    if (Directory(inputDirectory).existsSync()) {
-      Directory(inputDirectory).deleteSync(recursive: true);
-    }
-    if (Directory(processDirectory).existsSync()) {
-      Directory(processDirectory).deleteSync(recursive: true);
-    }
     await _notifier.close();
   }
 }
